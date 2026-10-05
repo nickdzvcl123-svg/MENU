@@ -6,43 +6,85 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build iOS IPA
     runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      # 1. Lấy source từ repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract source
+      # 2. Kiểm tra ZIP
+      - name: Check source ZIP
         run: |
-          rm -rf source
-          mkdir -p source
-          unzip -q "MobileHouseArrestSafe-Xcode.zip" -d source
-
-      - name: Verify project
-        run: |
-          echo "=== Files ==="
-          find source -maxdepth 4 -type f | sort
-
-          echo "=== Xcode project ==="
-          find source -name "*.xcodeproj" -print
-
-      - name: Show Xcode version
-        run: |
-          xcodebuild -version
-
-      - name: Build app
-        run: |
-          PROJECT=$(find "$GITHUB_WORKSPACE/source" -name "MobileHouseArrestSafe.xcodeproj" -print -quit)
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: Không tìm thấy MobileHouseArrestSafe.xcodeproj"
+          if [ ! -f "MobileHouseArrestSafe-Xcode.zip" ]; then
+            echo "❌ Không tìm thấy MobileHouseArrestSafe-Xcode.zip"
             exit 1
           fi
 
-          echo "Project: $PROJECT"
+          echo "✅ Tìm thấy source ZIP"
+          ls -lh "MobileHouseArrestSafe-Xcode.zip"
+
+      # 3. Giải nén source
+      - name: Extract Xcode source
+        run: |
+          rm -rf source
+          mkdir -p source
+
+          unzip -q "MobileHouseArrestSafe-Xcode.zip" -d source
+
+          echo "=== Source ==="
+          find source -maxdepth 4 -type f | sort
+
+      # 4. Tìm project
+      - name: Locate Xcode project
+        id: project
+        shell: bash
+        run: |
+          PROJECT=$(find "$GITHUB_WORKSPACE/source" \
+            -type d \
+            -name "MobileHouseArrestSafe.xcodeproj" \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "❌ Không tìm thấy MobileHouseArrestSafe.xcodeproj"
+            exit 1
+          fi
+
+          echo "✅ Project:"
+          echo "$PROJECT"
+
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      # 5. Hiển thị Xcode
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # 6. Kiểm tra target
+      - name: Show Xcode targets
+        run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -list
+
+      # 7. Build app
+      - name: Build MobileHouseArrest
+        shell: bash
+        run: |
+          PROJECT="${{ steps.project.outputs.project }}"
+
+          echo "======================================"
+          echo "Building MobileHouseArrestSafe"
+          echo "======================================"
 
           xcodebuild \
             -project "$PROJECT" \
@@ -50,51 +92,88 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Find built app
+      # 8. Tìm file .app
+      - name: Find built application
+        id: app
+        shell: bash
         run: |
-          echo "=== Built products ==="
-          find "$RUNNER_TEMP/DerivedData" \
-            -type d \
-            -name "*.app" \
-            -print
+          echo "=== Searching for .app ==="
 
-      - name: Create IPA
-        run: |
-          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products" \
+          APP=$(find "$GITHUB_WORKSPACE" \
             -type d \
-            -name "MobileHouseArrest.app" \
+            -path "*/Build/Products/Release-iphoneos/*.app" \
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: Không tìm thấy MobileHouseArrest.app"
+            echo "❌ Không tìm thấy file .app"
+
+            echo "=== Searching all .app files ==="
+            find "$GITHUB_WORKSPACE" \
+              -type d \
+              -name "*.app" \
+              -print
+
             exit 1
           fi
 
-          echo "APP: $APP"
+          echo "✅ APP:"
+          echo "$APP"
+
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+
+      # 9. Tạo IPA
+      - name: Create IPA
+        shell: bash
+        run: |
+          APP="${{ steps.app.outputs.app }}"
 
           rm -rf Payload
-          mkdir Payload
+          mkdir -p Payload
 
           cp -R "$APP" "Payload/MobileHouseArrest.app"
 
-          rm -f MobileHouseArrest.ipa
+          echo "=== Creating IPA ==="
 
           cd Payload
-          zip -r ../MobileHouseArrest.ipa MobileHouseArrest.app
+
+          zip -r \
+            "../MobileHouseArrest.ipa" \
+            "MobileHouseArrest.app"
+
           cd ..
 
-          echo "=== IPA created ==="
+          echo ""
+          echo "======================================"
+          echo "✅ IPA CREATED"
+          echo "======================================"
+
           ls -lh MobileHouseArrest.ipa
 
+      # 10. Kiểm tra IPA
+      - name: Verify IPA
+        run: |
+          if [ ! -f "MobileHouseArrest.ipa" ]; then
+            echo "❌ IPA không tồn tại"
+            exit 1
+          fi
+
+          echo "✅ IPA:"
+          ls -lh MobileHouseArrest.ipa
+
+          echo ""
+          echo "=== IPA contents ==="
+          unzip -l MobileHouseArrest.ipa | head -30
+
+      # 11. Upload IPA để tải về
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: MobileHouseArrest-IPA
           path: MobileHouseArrest.ipa
           if-no-files-found: error
+          retention-days: 7
