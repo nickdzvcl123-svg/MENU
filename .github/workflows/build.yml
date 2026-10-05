@@ -15,36 +15,17 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      # 1. Lấy source từ repository
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Kiểm tra ZIP
-      - name: Check source ZIP
-        run: |
-          if [ ! -f "MobileHouseArrestSafe-Xcode.zip" ]; then
-            echo "❌ Không tìm thấy MobileHouseArrestSafe-Xcode.zip"
-            exit 1
-          fi
-
-          echo "✅ Tìm thấy source ZIP"
-          ls -lh "MobileHouseArrestSafe-Xcode.zip"
-
-      # 3. Giải nén source
-      - name: Extract Xcode source
+      - name: Extract source
         run: |
           rm -rf source
           mkdir -p source
-
           unzip -q "MobileHouseArrestSafe-Xcode.zip" -d source
 
-          echo "=== Source ==="
-          find source -maxdepth 4 -type f | sort
-
-      # 4. Tìm project
-      - name: Locate Xcode project
+      - name: Find Xcode project
         id: project
-        shell: bash
         run: |
           PROJECT=$(find "$GITHUB_WORKSPACE/source" \
             -type d \
@@ -52,39 +33,20 @@ jobs:
             -print -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "❌ Không tìm thấy MobileHouseArrestSafe.xcodeproj"
+            echo "❌ Không tìm thấy Xcode project"
             exit 1
           fi
 
-          echo "✅ Project:"
-          echo "$PROJECT"
-
+          echo "Project: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      # 5. Hiển thị Xcode
-      - name: Show Xcode version
+      - name: Show Xcode
         run: |
           xcodebuild -version
-          swift --version
 
-      # 6. Kiểm tra target
-      - name: Show Xcode targets
+      - name: Build app
         run: |
           PROJECT="${{ steps.project.outputs.project }}"
-
-          xcodebuild \
-            -project "$PROJECT" \
-            -list
-
-      # 7. Build app
-      - name: Build MobileHouseArrest
-        shell: bash
-        run: |
-          PROJECT="${{ steps.project.outputs.project }}"
-
-          echo "======================================"
-          echo "Building MobileHouseArrestSafe"
-          echo "======================================"
 
           xcodebuild \
             -project "$PROJECT" \
@@ -97,23 +59,21 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      # 8. Tìm file .app
-      - name: Find built application
+      - name: Find generated APP
         id: app
-        shell: bash
         run: |
-          echo "=== Searching for .app ==="
+          echo "=== Searching for generated APP ==="
 
-          APP=$(find "$GITHUB_WORKSPACE" \
+          APP=$(find "$GITHUB_WORKSPACE/source" \
             -type d \
-            -path "*/Build/Products/Release-iphoneos/*.app" \
+            -name "MobileHouseArrestSafe.app" \
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "❌ Không tìm thấy file .app"
-
-            echo "=== Searching all .app files ==="
-            find "$GITHUB_WORKSPACE" \
+            echo "❌ Không tìm thấy MobileHouseArrestSafe.app"
+            echo ""
+            echo "=== APP files ==="
+            find "$GITHUB_WORKSPACE/source" \
               -type d \
               -name "*.app" \
               -print
@@ -121,59 +81,51 @@ jobs:
             exit 1
           fi
 
-          echo "✅ APP:"
+          echo "✅ Found:"
           echo "$APP"
 
           echo "app=$APP" >> "$GITHUB_OUTPUT"
 
-      # 9. Tạo IPA
-      - name: Create IPA
-        shell: bash
+      - name: Create APP copy
         run: |
           APP="${{ steps.app.outputs.app }}"
 
+          rm -rf Output
+          mkdir -p Output
+
+          cp -R "$APP" "Output/MobileHouseArrestSafe.app"
+
+          echo "=== APP created ==="
+          ls -lah Output/
+          du -sh Output/MobileHouseArrestSafe.app
+
+      - name: Create IPA
+        run: |
           rm -rf Payload
-          mkdir -p Payload
+          mkdir Payload
 
-          cp -R "$APP" "Payload/MobileHouseArrest.app"
-
-          echo "=== Creating IPA ==="
-
-          cd Payload
+          cp -R \
+            "Output/MobileHouseArrestSafe.app" \
+            "Payload/MobileHouseArrestSafe.app"
 
           zip -r \
-            "../MobileHouseArrest.ipa" \
-            "MobileHouseArrest.app"
+            "MobileHouseArrest.ipa" \
+            Payload
 
-          cd ..
-
-          echo ""
-          echo "======================================"
+          echo "================================"
           echo "✅ IPA CREATED"
-          echo "======================================"
+          echo "================================"
 
           ls -lh MobileHouseArrest.ipa
 
-      # 10. Kiểm tra IPA
-      - name: Verify IPA
-        run: |
-          if [ ! -f "MobileHouseArrest.ipa" ]; then
-            echo "❌ IPA không tồn tại"
-            exit 1
-          fi
+      - name: Upload APP
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileHouseArrest-APP
+          path: Output/MobileHouseArrestSafe.app
 
-          echo "✅ IPA:"
-          ls -lh MobileHouseArrest.ipa
-
-          echo ""
-          echo "=== IPA contents ==="
-          unzip -l MobileHouseArrest.ipa | head -30
-
-      # 11. Upload IPA để tải về
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: MobileHouseArrest-IPA
           path: MobileHouseArrest.ipa
-          if-no-files-found: error
-          retention-days: 7
