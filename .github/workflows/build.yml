@@ -1,0 +1,93 @@
+
+name: Build MobileHouseArrest IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Download source
+        uses: actions/checkout@v4
+
+      - name: Extract source ZIP
+        run: |
+          mkdir -p source
+          unzip -q MobileHouseArrestSafe-Xcode.zip -d source
+
+      - name: Find Xcode project
+        id: project
+        shell: bash
+        run: |
+          WORKSPACE=$(find source -type d -name "*.xcworkspace" -print -quit)
+          PROJECT=$(find source -type d -name "*.xcodeproj" -print -quit)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "kind=workspace" >> "$GITHUB_OUTPUT"
+            echo "path=$WORKSPACE" >> "$GITHUB_OUTPUT"
+            xcodebuild -list -json -workspace "$WORKSPACE" > schemes.json
+          elif [ -n "$PROJECT" ]; then
+            echo "kind=project" >> "$GITHUB_OUTPUT"
+            echo "path=$PROJECT" >> "$GITHUB_OUTPUT"
+            xcodebuild -list -json -project "$PROJECT" > schemes.json
+          else
+            echo "Không tìm thấy Xcode project trong ZIP"
+            exit 1
+          fi
+
+          SCHEME=$(python3 -c \
+            'import json; d=json.load(open("schemes.json")); o=d.get("project") or d.get("workspace"); print(o["schemes"][0])')
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Scheme: $SCHEME"
+
+      - name: Build iOS app
+        shell: bash
+        run: |
+          if [ "${{ steps.project.outputs.kind }}" = "workspace" ]; then
+            xcodebuild \
+              -workspace "${{ steps.project.outputs.path }}" \
+              -scheme "${{ steps.project.outputs.scheme }}" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          else
+            xcodebuild \
+              -project "${{ steps.project.outputs.path }}" \
+              -scheme "${{ steps.project.outputs.scheme }}" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          fi
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" \
+            -maxdepth 1 -type d -name "*.app" -print -quit)
+
+          if [ -z "$APP" ]; then
+            echo "Không tìm thấy file .app sau khi build"
+            exit 1
+          fi
+
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qr MobileHouseArrest-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileHouseArrest-IPA
+          path: MobileHouseArrest-unsigned.ipa
+          if-no-files-found: error
